@@ -4,21 +4,19 @@
 
 This project performs historical time series analysis and one-step-ahead forecasting of daily air raid alert duration in Ukraine.
 
-The workflow transforms event-level air raid alert records into continuous daily regional time series, investigates temporal patterns, and evaluates forecasting models for **Kyiv City**.
+The workflow transforms event-level air raid alert records into continuous daily regional time series, investigates temporal structure, and compares forecasting models for **Kyiv City**.
 
-The project is educational and analytical. It is designed to demonstrate reproducible time series preprocessing, exploratory data analysis, lag diagnostics, feature engineering, forecasting, and backtesting.
-
-> **Important:** This project is not a real-time warning system and must not be used for safety, operational, military, or personal decision-making.
+The project is educational and analytical. It is **not** a real-time warning system and must not be used for safety, operational, military, or personal decision-making.
 
 ---
 
 ## Research Goal
 
-The main goal is to answer the following question:
+The main research question is:
 
-> Can the daily total duration of air raid alerts in Kyiv City be forecast more accurately using historical time-series features than with a simple weekly baseline?
+> Can the daily total duration of air raid alerts in Kyiv City be forecast more accurately using historical time-series models than with a simple weekly baseline?
 
-The forecast target is:
+The forecasting target is:
 
 ```text
 Kyiv City daily total alert duration in minutes
@@ -35,9 +33,9 @@ Use information available before day t
 
 ## Time Series Definition
 
-A time series is a sequence of numerical observations ordered in time, where trends, seasonality, dependence on previous values, and future forecasting are important.
+A time series is a sequence of numerical observations ordered in time. It may contain dependence on previous values, trend, seasonality, irregular variation, and uncertainty.
 
-In this project, the main time series is:
+The main time series in this project is:
 
 ```text
 date → total_duration_min
@@ -45,34 +43,38 @@ date → total_duration_min
 
 for `Kyiv City`.
 
-Each observation represents the total duration of oblast-level air raid alerts during one calendar day.
+Each observation represents the total duration of oblast-level air raid alerts occurring during one local calendar day.
 
 ---
 
 ## Data Processing Pipeline
 
 ```text
-Raw event-level alert data
-        ↓
+Raw event-level air raid alert data
+                ↓
 Filtering of oblast-level records
-        ↓
+                ↓
 Timezone conversion to Europe/Kyiv
-        ↓
+                ↓
 Duplicate removal and duration validation
-        ↓
-Splitting events that cross midnight
-        ↓
+                ↓
+Splitting alerts that cross midnight
+                ↓
 Daily aggregation by region
-        ↓
+                ↓
 Continuous daily regional time series
-        ↓
+                ↓
 Exploratory time-series analysis
-        ↓
+                ↓
+STL decomposition
+                ↓
 Forecast feature engineering
-        ↓
-Baseline and Ridge Regression forecasting
-        ↓
-Final test evaluation and rolling-origin backtesting
+                ↓
+Seasonal Naive, Ridge, ARIMA and SARIMA forecasting
+                ↓
+Chronological final test evaluation
+                ↓
+Rolling-origin backtesting
 ```
 
 ---
@@ -85,23 +87,26 @@ The raw dataset is stored in:
 data/raw/official_data_en.csv
 ```
 
-The analysis uses only records with:
+Only records with:
 
 ```text
 level == "oblast"
 ```
+
+are used in the analysis.
 
 The main preprocessing steps are:
 
 * conversion of timestamps to the `Europe/Kyiv` timezone;
 * filtering to the project analysis period;
 * removal of exact duplicate events;
+* validation of alert duration;
 * removal of invalid non-positive durations;
-* splitting of alerts that continue across midnight;
+* splitting alerts that continue across midnight;
 * aggregation into daily regional metrics;
-* validation that the daily series is continuous.
+* validation that each regional daily series is continuous.
 
-The processed daily dataset contains one row per:
+The main processed dataset contains one row per:
 
 ```text
 date × region
@@ -109,18 +114,19 @@ date × region
 
 with variables such as:
 
-* `alert_start_count`;
-* `active_alert_count`;
-* `total_duration_min`;
-* `mean_active_duration_min`.
+```text
+alert_start_count
+active_alert_count
+total_duration_min
+mean_active_duration_min
+```
 
 ---
 
 ## Project Structure
 
 ```text
-PythonProject2/
-│
+.
 ├── data/
 │   ├── raw/
 │   │   └── official_data_en.csv
@@ -131,7 +137,8 @@ PythonProject2/
 │       ├── kyiv_city_forecast_train.csv
 │       ├── kyiv_city_forecast_test.csv
 │       ├── kyiv_city_acf_pacf_lags.csv
-│       └── kyiv_city_weekday_pattern.csv
+│       ├── kyiv_city_weekday_pattern.csv
+│       └── kyiv_city_stl_components.csv
 │
 ├── notebooks/
 │   ├── 01_data_audit.ipynb
@@ -140,11 +147,21 @@ PythonProject2/
 │
 ├── reports/
 │   ├── forecast_metrics.csv
+│   ├── seasonal_naive_test_predictions.csv
 │   ├── ridge_test_predictions.csv
 │   ├── ridge_feature_coefficients.csv
 │   ├── rolling_origin_backtest_metrics.csv
 │   ├── rolling_origin_backtest_fold_summary.csv
+│   ├── arima_sarima_validation_metrics.csv
+│   ├── arima_sarima_test_predictions.csv
 │   └── figures/
+│       ├── 07_kyiv_city_ridge_vs_baseline.png
+│       ├── 08_kyiv_city_daily_duration_with_rolling_means.png
+│       ├── 09_kyiv_city_acf_pacf_lags.png
+│       ├── 10_kyiv_city_weekday_pattern.png
+│       ├── 11_rolling_origin_backtest_mae.png
+│       ├── 12_kyiv_city_stl_decomposition.png
+│       └── 13_kyiv_city_seasonal_naive_arima_sarima.png
 │
 ├── src/
 │   ├── config.py
@@ -170,17 +187,16 @@ PythonProject2/
 
 ### `01_data_audit.ipynb`
 
-This notebook prepares the data for analysis.
+This notebook prepares the event-level data for time-series analysis.
 
 Main tasks:
 
-* loading the raw CSV file;
-* checking the dataset structure;
+* loading the raw CSV dataset;
+* checking dataset structure;
 * filtering oblast-level events;
-* converting timestamps to the local analysis timezone;
-* removing duplicates;
-* validating durations;
-* creating cleaned event-level data;
+* converting timestamps to `Europe/Kyiv`;
+* removing exact duplicates;
+* validating event duration;
 * splitting cross-midnight alerts;
 * aggregating events into daily regional metrics.
 
@@ -194,7 +210,7 @@ data/processed/daily_region_metrics.csv
 
 ### `02_exploratory_analysis.ipynb`
 
-This notebook investigates the historical structure of the time series.
+This notebook investigates historical temporal patterns.
 
 The analysis includes:
 
@@ -203,11 +219,10 @@ The analysis includes:
 * individual alert-duration distributions;
 * month-by-hour analysis of alert starts;
 * correlation of daily durations between selected regions;
-* Kyiv City daily time series with 7-day and 28-day trailing rolling means;
-* train-only ACF/PACF lag diagnostics;
-* train-only weekday pattern analysis.
-
-This notebook explains why the project is a time series analysis rather than a standard regression task.
+* Kyiv City daily duration with 7-day and 28-day rolling means;
+* train-only ACF/PACF diagnostics;
+* train-only weekday-pattern analysis;
+* STL decomposition of daily total alert duration in Kyiv City.
 
 ---
 
@@ -220,10 +235,12 @@ Main tasks:
 * creation of lag, rolling, and calendar features;
 * chronological train/test split;
 * Seasonal Naive baseline evaluation;
-* Ridge Regression training;
-* hyperparameter selection with `TimeSeriesSplit`;
-* final test evaluation;
-* rolling-origin backtesting across historical periods.
+* Ridge Regression with `TimeSeriesSplit`;
+* rolling-origin backtesting;
+* train-only ARIMA order selection;
+* train-only SARIMA order selection;
+* one-step-ahead walk-forward forecasting on the final test period;
+* comparison of Seasonal Naive, Ridge, ARIMA, and SARIMA.
 
 ---
 
@@ -231,16 +248,16 @@ Main tasks:
 
 ### Daily Time Series and Rolling Means
 
-The Kyiv City series is visualized as:
+The Kyiv City daily time series is visualized with:
 
 * daily total alert duration;
 * 7-day trailing rolling mean;
 * 28-day trailing rolling mean;
 * chronological boundary between training and final test periods.
 
-This helps reveal short-term fluctuations, longer changes in the local level of the series, and the location of the final evaluation period.
+This helps identify short-term variation, longer local changes in the series level, and the final evaluation boundary.
 
-Output figure:
+Output:
 
 ```text
 reports/figures/08_kyiv_city_daily_duration_with_rolling_means.png
@@ -250,25 +267,17 @@ reports/figures/08_kyiv_city_daily_duration_with_rolling_means.png
 
 ### ACF and PACF Diagnostics
 
-Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) were calculated using only the training period.
+Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) were calculated only on the training period.
 
-The final 180-day test period was excluded from lag diagnostics to avoid using future observations during feature justification.
+The final 180-day test period was excluded from lag diagnostics to avoid using future observations when justifying lag features or seasonal structure.
 
-Important training-period results:
+The diagnostics show:
 
-| Lag |   ACF |  PACF | Interpretation                                                       |
-| --: | ----: | ----: | -------------------------------------------------------------------- |
-|   1 | 0.327 | 0.327 | Strong direct short-term dependence                                  |
-|   7 | 0.266 | 0.116 | Moderate weekly pattern                                              |
-|  14 | 0.152 | 0.002 | Indirect relationship; little direct contribution after shorter lags |
+* meaningful short-term dependence at lag 1;
+* moderate weekly dependence at lag 7;
+* weaker direct dependence at lag 14 after shorter lags are considered.
 
-Interpretation:
-
-* `lag_1` is justified because the preceding day contains useful information;
-* `lag_7` is justified because the same weekday one week earlier contains a moderate signal;
-* `lag_14` is retained as an additional feature, while Ridge regularization can reduce its influence when it contributes little.
-
-Output files:
+Output:
 
 ```text
 data/processed/kyiv_city_acf_pacf_lags.csv
@@ -279,18 +288,11 @@ reports/figures/09_kyiv_city_acf_pacf_lags.png
 
 ### Weekday Pattern
 
-The weekday analysis was also calculated only on the training period.
+The weekday analysis was calculated only on the training period.
 
-The results indicate a moderate, but not deterministic, weekly pattern:
+The results indicate a moderate, but non-deterministic, weekly pattern. Calendar variables can therefore be useful supporting features, but they cannot explain abrupt changes in alert duration.
 
-* Thursday had the highest mean and median daily duration;
-* Sunday had the lowest median duration and the largest share of zero-duration days;
-* Friday had the smallest number of zero-duration days;
-* standard deviations were large for every weekday.
-
-Therefore, calendar features are useful as supporting signals, but they are weaker than recent historical values such as `lag_1` and `lag_7`.
-
-Output files:
+Output:
 
 ```text
 data/processed/kyiv_city_weekday_pattern.csv
@@ -299,9 +301,43 @@ reports/figures/10_kyiv_city_weekday_pattern.png
 
 ---
 
+### STL Decomposition
+
+STL decomposition separates the daily Kyiv City series into:
+
+[
+y_t = T_t + S_t + R_t,
+]
+
+where:
+
+* (y_t) is the observed daily total alert duration;
+* (T_t) is the long-term trend;
+* (S_t) is the repeating weekly seasonal component;
+* (R_t) is the residual variation not explained by trend or weekly seasonality.
+
+The decomposition uses:
+
+```text
+period = 7
+seasonal = 13
+robust = True
+```
+
+The `robust=True` option does not remove long real-world alerts. It reduces the influence of isolated extreme values while estimating trend and seasonal components.
+
+Outputs:
+
+```text
+data/processed/kyiv_city_stl_components.csv
+reports/figures/12_kyiv_city_stl_decomposition.png
+```
+
+---
+
 ## Forecasting Setup
 
-### Target
+### Target Variable
 
 ```text
 total_duration_min
@@ -309,11 +345,11 @@ total_duration_min
 
 for `Kyiv City`.
 
-### Forecast Features
+### Ridge Regression Features
 
-The Ridge Regression model uses 13 features.
+The Ridge model uses 13 forecasting features.
 
-#### Lag features
+Lag features:
 
 ```text
 lag_1
@@ -321,7 +357,7 @@ lag_7
 lag_14
 ```
 
-#### Rolling mean features
+Rolling mean features:
 
 ```text
 rolling_mean_7
@@ -329,9 +365,7 @@ rolling_mean_14
 rolling_mean_28
 ```
 
-Forecasting rolling means are shifted by one day, so they use only information known before the forecasted date.
-
-#### Calendar features
+Calendar features:
 
 ```text
 day_of_week
@@ -343,55 +377,133 @@ month_sin
 month_cos
 ```
 
+All rolling means are shifted by one day. Therefore, they use only information available before the forecasted date.
+
 ---
 
 ## Chronological Train/Test Split
 
 The final evaluation uses a chronological split.
 
-| Dataset part    | Date range               | Purpose                                        |
-| --------------- | ------------------------ | ---------------------------------------------- |
-| Training data   | 2022-04-12 to 2025-06-03 | Model fitting and time-series cross-validation |
-| Final test data | 2025-06-04 to 2025-11-30 | Untouched final evaluation                     |
-| Final test size | 180 days                 | Out-of-sample performance measurement          |
+| Dataset part               | Date range               | Purpose                                          |
+| -------------------------- | ------------------------ | ------------------------------------------------ |
+| Ridge training data        | 2022-04-12 to 2025-06-03 | Feature-based model fitting and cross-validation |
+| ARIMA/SARIMA training data | 2022-03-15 to 2025-06-03 | Classical univariate model fitting               |
+| Final test data            | 2025-06-04 to 2025-11-30 | Untouched out-of-sample evaluation               |
+| Final test size            | 180 days                 | Final model comparison                           |
 
-The split is chronological rather than random because forecasting must not use future observations when predicting earlier dates.
+ARIMA and SARIMA use 28 additional early training days because they model the original daily series directly and do not require a 28-day rolling feature window.
+
+All models are evaluated on the same final 180-day test period.
 
 ---
 
-## Models
+## Forecasting Models
 
 ### Seasonal Naive Baseline
 
-The baseline model uses the value from the same weekday one week earlier:
+The Seasonal Naive model predicts the current day using the value from the same weekday one week earlier:
 
 [
-\hat{y}*{t} = y*{t-7}
+\hat{y}*{t} = y*{t-7}.
 ]
 
-This baseline is meaningful because ACF/PACF diagnostics identified a moderate weekly pattern.
+It is a meaningful baseline because exploratory analysis identified a moderate weekly pattern.
 
 ---
 
 ### Ridge Regression
 
-Ridge Regression combines lag features, rolling means, and calendar features.
+Ridge Regression uses lag, rolling, and calendar features.
 
-It uses `StandardScaler` before Ridge Regression and selects the regularization strength through chronological cross-validation.
+The regularization parameter was selected using chronological `TimeSeriesSplit`.
 
-The best regularization parameter on the final training data was:
+Best parameter:
 
 ```text
 alpha = 1000.0
 ```
 
-A strong Ridge penalty helps reduce overfitting to highly variable historical observations.
+---
+
+### ARIMA
+
+ARIMA models the temporal dependence of the univariate daily duration series.
+
+A small set of candidate orders was evaluated using three expanding validation folds inside the training period only.
+
+The selected model was:
+
+[
+\text{ARIMA}(0,1,1).
+]
+
+---
+
+### SARIMA
+
+SARIMA extends ARIMA with explicit weekly seasonality:
+
+[
+(p,d,q) \times (P,D,Q)_7.
+]
+
+The selected seasonal model was:
+
+[
+\text{SARIMA}(1,1,1) \times (0,1,1)_7.
+]
+
+The seasonal period was:
+
+```text
+s = 7 days
+```
+
+Both ARIMA and SARIMA were fitted using:
+
+[
+z_t = \log(1+y_t),
+]
+
+where (y_t) is daily alert duration in minutes.
+
+Forecasts were returned to the original scale using:
+
+[
+\hat{y}_t = \exp(\hat{z}_t)-1.
+]
+
+---
+
+## Model Selection and Evaluation Protocol
+
+ARIMA and SARIMA orders were selected only inside the training period.
+
+The final 180-day test period was not used:
+
+* for ACF/PACF diagnostics;
+* for feature selection;
+* for ARIMA order selection;
+* for SARIMA order selection;
+* for hyperparameter tuning.
+
+Final predictions were created with one-step-ahead walk-forward forecasting:
+
+[
+\hat{y}_{t \mid t-1}
+====================
+
+f(y_1, y_2, \ldots, y_{t-1}).
+]
+
+After each test day, only the newly observed actual value was added to the available historical information before forecasting the next day.
 
 ---
 
 ## Final Test Results
 
-The final untouched test period covered:
+The untouched final test period was:
 
 ```text
 2025-06-04 to 2025-11-30
@@ -399,33 +511,56 @@ The final untouched test period covered:
 
 with 180 daily observations.
 
-| Model                             | MAE, min | RMSE, min |    sMAPE |
-| --------------------------------- | -------: | --------: | -------: |
-| Ridge Regression (`alpha=1000.0`) |  111.104 |   150.887 | 106.666% |
-| Seasonal Naive (`lag_7`)          |  134.345 |   198.484 | 124.905% |
+| Model                             |    MAE, min |   RMSE, min |    sMAPE |
+| --------------------------------- | ----------: | ----------: | -------: |
+| ARIMA(0, 1, 1)                    | **100.338** |     168.680 | 106.441% |
+| SARIMA(1, 1, 1) × (0, 1, 1, 7)    |     101.104 |     168.314 | 108.176% |
+| Ridge Regression (`alpha=1000.0`) |     111.104 | **150.887** | 106.666% |
+| Seasonal Naive (`lag_7`)          |     134.345 |     198.484 | 124.905% |
 
-Ridge Regression improved over the Seasonal Naive baseline:
+### Interpretation
 
-* MAE reduction: approximately 17.3%;
-* RMSE reduction: approximately 24.0%;
-* no negative Ridge predictions were produced.
+* **ARIMA(0,1,1)** achieved the lowest MAE and was the best model according to the main metric of typical daily absolute error.
+* SARIMA achieved a very similar result, but weekly seasonal differencing did not improve MAE relative to the simpler ARIMA model.
+* Ridge Regression had a higher MAE but the lowest RMSE, suggesting relatively better performance on some large forecast errors.
+* Seasonal Naive was clearly weaker than ARIMA, SARIMA, and Ridge Regression.
+* MAE is treated as the main metric because percentage metrics become unstable for zero-duration and very low-duration days.
 
-The primary comparison metric is MAE because percentage metrics can become unstable on zero-duration or very low-duration days.
+ARIMA reduced MAE relative to Seasonal Naive by approximately:
 
-Output files:
+[
+\frac{134.345 - 100.338}{134.345}
+\times 100%
+\approx 25.3%.
+]
+
+---
+
+## Final Forecast Comparison
+
+The final comparison figure includes:
+
+* the last 180 days of the training period;
+* actual daily duration values during the final test period;
+* Seasonal Naive forecasts;
+* ARIMA forecasts;
+* SARIMA forecasts;
+* a 95% SARIMA prediction interval;
+* the boundary between training and final test data.
+
+The wide SARIMA prediction interval is an important result: abrupt changes in air raid alert duration are not reliably predictable using historical duration values and weekly seasonality alone.
+
+Output:
 
 ```text
-reports/forecast_metrics.csv
-reports/ridge_test_predictions.csv
-reports/ridge_feature_coefficients.csv
-reports/figures/07_kyiv_city_ridge_vs_baseline.png
+reports/figures/13_kyiv_city_seasonal_naive_arima_sarima.png
 ```
 
 ---
 
 ## Rolling-Origin Backtesting
 
-Rolling-origin backtesting was used to test whether the Ridge model performs better than the baseline across several historical periods, not only in the final 180-day test interval.
+Rolling-origin backtesting evaluates Ridge Regression and Seasonal Naive across multiple historical periods rather than only one final test interval.
 
 Configuration:
 
@@ -433,29 +568,12 @@ Configuration:
 Number of historical folds: 3
 Test horizon per fold: 120 days
 Training window: expanding
-Final 180-day test period: excluded completely
+Final 180-day test period: excluded
 ```
-
-### MAE Results by Historical Fold
-
-| Fold | Ridge MAE, min | Seasonal Naive MAE, min | Ridge improvement |
-| ---: | -------------: | ----------------------: | ----------------: |
-|    1 |         73.380 |                  96.699 | 23.319 min, 24.1% |
-|    2 |        102.195 |                 139.301 | 37.105 min, 26.6% |
-|    3 |        102.060 |                 130.579 | 28.519 min, 21.8% |
-
-### Average Backtesting Performance
-
-| Model            | Mean MAE, min | Mean RMSE, min | Mean sMAPE |
-| ---------------- | ------------: | -------------: | ---------: |
-| Ridge Regression |        92.545 |        131.780 |    91.343% |
-| Seasonal Naive   |       122.193 |        167.836 |   112.823% |
 
 Ridge Regression outperformed Seasonal Naive in all three historical folds.
 
-This indicates that its improvement is not limited to one final test period. However, the absolute error level changes between periods, which is expected for a non-stationary series affected by changing external conditions.
-
-Output files:
+Outputs:
 
 ```text
 reports/rolling_origin_backtest_metrics.csv
@@ -465,9 +583,25 @@ reports/figures/11_rolling_origin_backtest_mae.png
 
 ---
 
+## Key Output Files
+
+```text
+data/processed/daily_region_metrics.csv
+data/processed/kyiv_city_stl_components.csv
+
+reports/forecast_metrics.csv
+reports/arima_sarima_validation_metrics.csv
+reports/arima_sarima_test_predictions.csv
+
+reports/figures/12_kyiv_city_stl_decomposition.png
+reports/figures/13_kyiv_city_seasonal_naive_arima_sarima.png
+```
+
+---
+
 ## Installation
 
-Create and activate a virtual environment:
+Create and activate a virtual environment.
 
 ```bash
 python -m venv .venv
@@ -475,7 +609,7 @@ python -m venv .venv
 
 Windows PowerShell:
 
-```bash
+```powershell
 .venv\Scripts\Activate.ps1
 ```
 
@@ -497,13 +631,13 @@ Run the notebooks in this order:
 3. notebooks/03_forecasting_preparation.ipynb
 ```
 
-This order is important because each stage creates processed files required by the following stage.
+This order is important because each notebook creates files used by later stages.
 
 ---
 
 ## Running Tests
 
-From the project root directory:
+From the project root:
 
 ```bash
 python -m pytest -q
@@ -512,15 +646,15 @@ python -m pytest -q
 The test suite checks:
 
 * preprocessing and duplicate removal;
-* daily aggregation and cross-midnight splitting;
+* cross-midnight alert splitting;
+* daily aggregation;
+* time-series continuity;
 * visualization outputs;
-* time-series continuity checks;
 * ACF/PACF diagnostics;
 * weekday-pattern calculations;
-* Seasonal Naive evaluation;
+* Seasonal Naive forecasting;
 * Ridge Regression;
-* rolling-origin backtesting;
-* saved report figures.
+* rolling-origin backtesting.
 
 ---
 
@@ -529,13 +663,12 @@ The test suite checks:
 This project has important limitations:
 
 * it uses historical alert-duration data only;
-* it does not include causes of alerts, military activity, weather, intelligence information, or geopolitical events;
-* air raid alert dynamics are non-stationary and can change abruptly;
-* relationships found in past data may not remain stable in future periods;
-* the model produces a retrospective statistical forecast, not a reliable real-time warning;
-* the model must not be used for personal safety decisions, emergency planning, or operational use.
-
-The results should be interpreted as an educational demonstration of time series analysis and forecasting methodology.
+* it does not include causes of alerts, military activity, weather, intelligence information, geopolitical events, or operational context;
+* the time series is non-stationary and can change abruptly;
+* long-duration alert days are real observations and were not automatically removed as outliers;
+* relationships observed in the past may not remain stable in the future;
+* all forecasts are retrospective statistical estimates;
+* the project must not be used for safety, emergency, military, or operational decisions.
 
 ---
 
@@ -549,17 +682,19 @@ Matplotlib
 scikit-learn
 statsmodels
 pytest
-Jupyter Notebook
+Jupyter Notebook / JupyterLab
 ```
 
 ---
 
 ## Key Methodological Principles
 
-* event-level data are converted into a continuous daily time series;
+* event-level alerts are converted into a continuous daily time series;
 * all final evaluation periods are chronological;
-* future data are excluded from feature justification and training;
-* ACF/PACF diagnostics are calculated on training data only;
-* the Ridge model is compared against a meaningful Seasonal Naive baseline;
-* model stability is checked through rolling-origin backtesting;
+* random train/test splitting is not used;
+* future data are excluded from model selection and evaluation;
+* ACF/PACF diagnostics use training data only;
+* ARIMA and SARIMA orders are selected using train-only expanding validation;
+* models are compared with a meaningful Seasonal Naive baseline;
+* final forecasts use a one-step-ahead walk-forward protocol;
 * conclusions are limited to retrospective statistical performance.
