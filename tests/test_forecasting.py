@@ -2,13 +2,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 import numpy as np
+
 from src.forecasting import (
     evaluate_seasonal_naive_baseline,
     plot_seasonal_naive_baseline,
-)
-from src.forecasting import (
     plot_ridge_vs_baseline,
     train_and_evaluate_ridge_regression,
+    plot_rolling_origin_backtest_mae,
+    run_rolling_origin_backtest,
 )
 
 def test_seasonal_naive_metrics_are_calculated_correctly():
@@ -245,5 +246,126 @@ def test_ridge_vs_baseline_plot_is_saved(tmp_path):
     assert output_path.exists()
     assert axes.get_xlabel() == "Date"
     assert axes.get_ylabel() == "Total alert duration, minutes"
+
+    plt.close(figure)
+
+
+
+
+def test_rolling_origin_backtest_runs_and_saves_plot(
+    tmp_path,
+):
+    number_of_days = 220
+
+    dates = pd.date_range(
+        start="2024-01-01",
+        periods=number_of_days,
+        freq="D",
+    )
+
+    day_index = np.arange(number_of_days)
+
+    target_values = (
+        100
+        + 20 * np.sin(2 * np.pi * day_index / 7)
+        + 0.15 * day_index
+    )
+
+    lag_1_values = np.roll(
+        target_values,
+        1,
+    )
+
+    lag_7_values = np.roll(
+        target_values,
+        7,
+    )
+
+    lag_1_values[0] = target_values[0]
+    lag_7_values[:7] = target_values[0]
+
+    feature_data = pd.DataFrame(
+        {
+            "date": dates,
+            "target": target_values,
+            "seasonal_naive_prediction": lag_7_values,
+            "lag_1": lag_1_values,
+            "lag_7": lag_7_values,
+        }
+    )
+
+    final_test_start_date = dates[190]
+
+    (
+        backtest_metrics,
+        fold_summary,
+        model_summary,
+    ) = run_rolling_origin_backtest(
+        feature_data=feature_data,
+        forecast_region="Kyiv City",
+        feature_columns=[
+            "lag_1",
+            "lag_7",
+        ],
+        final_test_start_date=final_test_start_date,
+        alpha_candidates=[
+            0.1,
+            1.0,
+        ],
+        time_series_splits=2,
+        n_folds=2,
+        test_size_days=30,
+    )
+
+    output_path = (
+        tmp_path
+        / "rolling_origin_backtest_mae.png"
+    )
+
+    figure, axes = plot_rolling_origin_backtest_mae(
+        backtest_metrics=backtest_metrics,
+        forecast_region="Kyiv City",
+        output_path=output_path,
+    )
+
+    assert len(backtest_metrics) == 4
+    assert len(fold_summary) == 2
+    assert len(model_summary) == 2
+
+    assert set(backtest_metrics["model_family"]) == {
+        "Ridge Regression",
+        "Seasonal Naive",
+    }
+
+    assert (
+        pd.to_datetime(
+            backtest_metrics["test_end_date"]
+        ).max()
+        < final_test_start_date
+    )
+
+    assert (
+        backtest_metrics["mae_min"] >= 0
+    ).all()
+
+    assert (
+        backtest_metrics.loc[
+            backtest_metrics["model_family"].eq(
+                "Ridge Regression"
+            ),
+            "selected_alpha",
+        ]
+        .notna()
+        .all()
+    )
+
+    assert output_path.exists()
+
+    assert (
+        axes.get_xlabel()
+        == "Historical backtest fold"
+    )
+
+    assert axes.get_ylabel() == "MAE, minutes"
 
     plt.close(figure)

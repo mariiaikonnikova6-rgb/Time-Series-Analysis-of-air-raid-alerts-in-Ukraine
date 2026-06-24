@@ -1,7 +1,11 @@
 import pandas as pd
+import matplotlib.pyplot as plt
 import pytest
 
-from src.visualization import prepare_monthly_duration
+from src.visualization import (prepare_monthly_duration, plot_daily_time_series_with_rolling_means,prepare_acf_pacf_lag_diagnostics,
+plot_acf_pacf_lag_diagnostics,prepare_acf_pacf_lag_diagnostics,
+plot_acf_pacf_lag_diagnostics,plot_weekday_pattern,
+prepare_weekday_pattern,)
 
 
 def test_monthly_duration_is_aggregated_correctly():
@@ -479,3 +483,219 @@ def test_daily_duration_correlation_heatmap_is_saved(tmp_path):
 
 
 
+def test_daily_time_series_plot_with_rolling_means_is_saved(
+    tmp_path,
+):
+    dates = pd.date_range(
+        start="2024-01-01",
+        periods=40,
+        freq="D",
+    )
+
+    daily_metrics = pd.DataFrame(
+        {
+            "date": dates,
+            "region": ["Kyiv City"] * len(dates),
+            "total_duration_min": [
+                float(day * 10)
+                for day in range(len(dates))
+            ],
+        }
+    )
+
+    output_path = (
+        tmp_path
+        / "daily_time_series_with_rolling_means.png"
+    )
+
+    (
+        time_series_data,
+        figure,
+        axes,
+    ) = plot_daily_time_series_with_rolling_means(
+        daily_metrics=daily_metrics,
+        forecast_region="Kyiv City",
+        test_start_date="2024-01-31",
+        output_path=output_path,
+    )
+
+    assert len(time_series_data) == 40
+
+    assert (
+        time_series_data["rolling_mean_7"]
+        .iloc[6]
+        == 30.0
+    )
+
+    assert (
+        time_series_data["rolling_mean_28"]
+        .iloc[27]
+        == 135.0
+    )
+
+    assert output_path.exists()
+
+    assert axes.get_xlabel() == "Date"
+
+    assert (
+        axes.get_ylabel()
+        == "Total alert duration, minutes"
+    )
+
+    plt.close(figure)
+
+
+
+
+
+
+def test_acf_pacf_lag_diagnostics_are_created_and_saved(
+    tmp_path,
+):
+    dates = pd.date_range(
+        start="2024-01-01",
+        periods=80,
+        freq="D",
+    )
+
+    daily_metrics = pd.DataFrame(
+        {
+            "date": dates,
+            "region": ["Kyiv City"] * len(dates),
+            "total_duration_min": [
+                float(
+                    30
+                    + (day % 7) * 8
+                    + (day % 5) * 3
+                )
+                for day in range(len(dates))
+            ],
+        }
+    )
+
+    (
+        training_series,
+        lag_diagnostics,
+    ) = prepare_acf_pacf_lag_diagnostics(
+        daily_metrics=daily_metrics,
+        forecast_region="Kyiv City",
+        test_start_date="2024-03-01",
+        max_lags=20,
+    )
+
+    output_path = (
+        tmp_path
+        / "acf_pacf_lag_diagnostics.png"
+    )
+
+    figure, axes = plot_acf_pacf_lag_diagnostics(
+        training_series=training_series,
+        max_lags=20,
+        selected_lags=[1, 7, 14],
+        output_path=output_path,
+    )
+
+    assert len(training_series) == 60
+    assert len(lag_diagnostics) == 21
+
+    assert set([1, 7, 14]).issubset(
+        set(lag_diagnostics["lag_days"])
+    )
+
+    assert (
+        lag_diagnostics["acf"]
+        .between(-1, 1)
+        .all()
+    )
+
+    assert (
+        lag_diagnostics["pacf"]
+        .between(-1, 1)
+        .all()
+    )
+
+    assert output_path.exists()
+    assert len(axes) == 2
+    assert axes[0].get_xlabel() == "Lag, days"
+
+    plt.close(figure)
+
+
+
+def test_weekday_pattern_is_prepared_and_saved(
+    tmp_path,
+):
+    dates = pd.date_range(
+        start="2024-01-01",
+        periods=80,
+        freq="D",
+    )
+
+    daily_metrics = pd.DataFrame(
+        {
+            "date": dates,
+            "region": ["Kyiv City"] * len(dates),
+            "total_duration_min": [
+                float(
+                    20
+                    + (day % 7) * 10
+                )
+                for day in range(len(dates))
+            ],
+        }
+    )
+
+    (
+        training_weekday_data,
+        weekday_summary,
+    ) = prepare_weekday_pattern(
+        daily_metrics=daily_metrics,
+        forecast_region="Kyiv City",
+        test_start_date="2024-03-01",
+    )
+
+    output_path = (
+        tmp_path
+        / "weekday_pattern.png"
+    )
+
+    figure, axes = plot_weekday_pattern(
+        weekday_summary=weekday_summary,
+        forecast_region="Kyiv City",
+        output_path=output_path,
+    )
+
+    assert len(training_weekday_data) == 60
+
+    assert weekday_summary["days"].sum() == 60
+
+    assert weekday_summary["weekday"].tolist() == [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+    ]
+
+    assert len(weekday_summary) == 7
+
+    assert (
+        weekday_summary["mean_duration_min"] >= 0
+    ).all()
+
+    assert (
+        weekday_summary["median_duration_min"] >= 0
+    ).all()
+
+    assert output_path.exists()
+
+    assert axes.get_xlabel() == "Day of week"
+
+    assert (
+        axes.get_ylabel()
+        == "Total alert duration, minutes"
+    )
+
+    plt.close(figure)

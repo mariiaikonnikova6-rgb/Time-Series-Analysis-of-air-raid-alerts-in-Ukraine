@@ -990,3 +990,478 @@ def plot_ridge_vs_baseline(
         )
 
     return figure, axes
+
+
+
+def run_rolling_origin_backtest(
+    feature_data: pd.DataFrame,
+    forecast_region: str,
+    feature_columns: list[str],
+    final_test_start_date: str | pd.Timestamp,
+    alpha_candidates: list[float],
+    time_series_splits: int,
+    n_folds: int,
+    test_size_days: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Run expanding-window rolling-origin backtesting for Ridge Regression
+    and the Seasonal Naive baseline.
+
+    The final test period is excluded completely. Historical folds use
+    only observations available before their own test window.
+    """
+    required_columns = [
+        "date",
+        "target",
+        "seasonal_naive_prediction",
+        *feature_columns,
+    ]
+
+    validate_required_columns(
+        dataframe=feature_data,
+        required_columns=required_columns,
+    )
+
+    if not feature_columns:
+        raise ValueError(
+            "feature_columns cannot be empty."
+        )
+
+    if n_folds <= 0:
+        raise ValueError(
+            "n_folds must be a positive integer."
+        )
+
+    if test_size_days <= 0:
+        raise ValueError(
+            "test_size_days must be a positive integer."
+        )
+
+    final_test_start_date = pd.to_datetime(
+        final_test_start_date,
+        errors="coerce",
+    )
+
+    if pd.isna(final_test_start_date):
+        raise ValueError(
+            "final_test_start_date must be a valid date."
+        )
+
+    final_test_start_date = final_test_start_date.normalize()
+
+    backtest_data = feature_data.copy()
+
+    backtest_data["date"] = pd.to_datetime(
+        backtest_data["date"],
+        errors="coerce",
+    ).dt.normalize()
+
+    numeric_columns = [
+        "target",
+        "seasonal_naive_prediction",
+        *feature_columns,
+    ]
+
+    backtest_data[numeric_columns] = (
+        backtest_data[numeric_columns]
+        .apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+    )
+
+    if backtest_data["date"].isna().any():
+        raise ValueError(
+            "feature_data contains invalid dates."
+        )
+
+    if backtest_data[numeric_columns].isna().any().any():
+        raise ValueError(
+            "feature_data contains missing or invalid "
+            "target, baseline, or feature values."
+        )
+
+    if not np.isfinite(
+        backtest_data[numeric_columns].to_numpy()
+    ).all():
+        raise ValueError(
+            "feature_data contains non-finite values."
+        )
+
+    if (backtest_data["target"] < 0).any():
+        raise ValueError(
+            "feature_data contains negative target values."
+        )
+
+    backtest_data = (
+        backtest_data
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    if backtest_data["date"].duplicated().any():
+        raise ValueError(
+            "feature_data contains duplicate dates."
+        )
+
+    if final_test_start_date not in pd.DatetimeIndex(
+        backtest_data["date"]
+    ):
+        raise ValueError(
+            "final_test_start_date is not present "
+            "in feature_data."
+        )
+
+    historical_data = (
+        backtest_data.loc[
+            backtest_data["date"].lt(final_test_start_date)
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    if historical_data.empty:
+        raise ValueError(
+            "No historical observations remain before "
+            "the final test period."
+        )
+
+    required_test_rows = n_folds * test_size_days
+
+    if len(historical_data) <= required_test_rows:
+        raise ValueError(
+            "Not enough historical observations for the "
+            "requested rolling-origin folds."
+        )
+
+    first_test_start_index = (
+        len(historical_data)
+        - required_test_rows
+    )
+
+    if first_test_start_index <= time_series_splits:
+        raise ValueError(
+            "The first training window is too short for "
+            "the requested TimeSeriesSplit configuration."
+        )
+
+    fold_metric_frames = []
+
+    for fold_id in range(1, n_folds + 1):
+        test_start_index = (
+            first_test_start_index
+            + (fold_id - 1) * test_size_days
+        )
+
+        test_end_index = (
+            test_start_index
+            + test_size_days
+        )
+
+        fold_train_data = (
+            historical_data
+            .iloc[:test_start_index]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        fold_test_data = (
+            historical_data
+            .iloc[test_start_index:test_end_index]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        if fold_train_data.empty or fold_test_data.empty:
+            raise ValueError(
+                f"Fold {fold_id} has an empty train or test dataset."
+            )
+
+        if (
+            fold_train_data["date"].max()
+            >= fold_test_data["date"].min()
+        ):
+            raise ValueError(
+                f"Fold {fold_id} has overlapping train and test dates."
+            )
+
+        (
+            baseline_evaluation,
+            baseline_metrics,
+        ) = evaluate_seasonal_naive_baseline(
+            test_data=fold_test_data,
+            forecast_region=forecast_region,
+        )
+
+        (
+            ridge_evaluation,
+            ridge_metrics,
+            ridge_coefficients,
+            ridge_cv_results,
+            best_ridge_model,
+        ) = train_and_evaluate_ridge_regression(
+            train_data=fold_train_data,
+            test_data=fold_test_data,
+            feature_columns=feature_columns,
+            forecast_region=forecast_region,
+            alpha_candidates=alpha_candidates,
+            time_series_splits=time_series_splits,
+        )
+
+        selected_alpha = float(
+            best_ridge_model
+            .named_steps["ridge"]
+            .alpha
+        )
+
+        baseline_metrics = baseline_metrics.copy()
+        ridge_metrics = ridge_metrics.copy()
+
+        baseline_metrics["model_family"] = "Seasonal Naive"
+        baseline_metrics["selected_alpha"] = np.nan
+
+        ridge_metrics["model_family"] = "Ridge Regression"
+        ridge_metrics["selected_alpha"] = selected_alpha
+
+        if (
+            "negative_raw_predictions_clipped_to_zero"
+            not in baseline_metrics.columns
+        ):
+            baseline_metrics[
+                "negative_raw_predictions_clipped_to_zero"
+            ] = 0
+
+        fold_metadata = {
+            "fold_id": fold_id,
+            "train_start_date": (
+                fold_train_data["date"].min().date()
+            ),
+            "train_end_date": (
+                fold_train_data["date"].max().date()
+            ),
+            "train_rows": len(fold_train_data),
+            "test_start_date": (
+                fold_test_data["date"].min().date()
+            ),
+            "test_end_date": (
+                fold_test_data["date"].max().date()
+            ),
+            "test_rows": len(fold_test_data),
+        }
+
+        for column_name, value in fold_metadata.items():
+            baseline_metrics[column_name] = value
+            ridge_metrics[column_name] = value
+
+        fold_metric_frames.extend(
+            [
+                baseline_metrics,
+                ridge_metrics,
+            ]
+        )
+
+    backtest_metrics = pd.concat(
+        fold_metric_frames,
+        ignore_index=True,
+    )
+
+    backtest_metrics = (
+        backtest_metrics
+        .sort_values(
+            ["fold_id", "model_family"]
+        )
+        .reset_index(drop=True)
+    )
+
+    fold_summary = (
+        backtest_metrics
+        .pivot_table(
+            index=[
+                "fold_id",
+                "train_start_date",
+                "train_end_date",
+                "train_rows",
+                "test_start_date",
+                "test_end_date",
+                "test_rows",
+            ],
+            columns="model_family",
+            values="mae_min",
+            aggfunc="first",
+        )
+        .reset_index()
+    )
+
+    fold_summary.columns.name = None
+
+    required_model_columns = [
+        "Ridge Regression",
+        "Seasonal Naive",
+    ]
+
+    missing_model_columns = [
+        column
+        for column in required_model_columns
+        if column not in fold_summary.columns
+    ]
+
+    if missing_model_columns:
+        raise ValueError(
+            "Backtest results are missing model families: "
+            f"{missing_model_columns}"
+        )
+
+    fold_summary["ridge_mae_improvement_min"] = (
+        fold_summary["Seasonal Naive"]
+        - fold_summary["Ridge Regression"]
+    )
+
+    fold_summary["ridge_mae_improvement_percent"] = (
+        100
+        * fold_summary["ridge_mae_improvement_min"]
+        / fold_summary["Seasonal Naive"]
+    )
+
+    model_summary = (
+        backtest_metrics
+        .groupby(
+            "model_family",
+            as_index=False,
+        )
+        .agg(
+            folds=("fold_id", "nunique"),
+            mean_mae_min=("mae_min", "mean"),
+            median_mae_min=("mae_min", "median"),
+            std_mae_min=("mae_min", "std"),
+            mean_rmse_min=("rmse_min", "mean"),
+            mean_smape_percent=("smape_percent", "mean"),
+        )
+        .sort_values("mean_mae_min")
+        .reset_index(drop=True)
+    )
+
+    return (
+        backtest_metrics,
+        fold_summary,
+        model_summary,
+    )
+
+
+def plot_rolling_origin_backtest_mae(
+    backtest_metrics: pd.DataFrame,
+    forecast_region: str,
+    output_path: str | Path | None = None,
+):
+    """
+    Plot MAE for each model across rolling-origin backtest folds.
+    """
+    required_columns = [
+        "fold_id",
+        "model_family",
+        "mae_min",
+    ]
+
+    validate_required_columns(
+        dataframe=backtest_metrics,
+        required_columns=required_columns,
+    )
+
+    plot_data = backtest_metrics.copy()
+
+    plot_data["fold_id"] = pd.to_numeric(
+        plot_data["fold_id"],
+        errors="coerce",
+    )
+
+    plot_data["mae_min"] = pd.to_numeric(
+        plot_data["mae_min"],
+        errors="coerce",
+    )
+
+    if plot_data["fold_id"].isna().any():
+        raise ValueError(
+            "backtest_metrics contains invalid fold IDs."
+        )
+
+    if plot_data["mae_min"].isna().any():
+        raise ValueError(
+            "backtest_metrics contains invalid MAE values."
+        )
+
+    if (plot_data["mae_min"] < 0).any():
+        raise ValueError(
+            "backtest_metrics contains negative MAE values."
+        )
+
+    if plot_data["model_family"].isna().any():
+        raise ValueError(
+            "backtest_metrics contains missing model-family values."
+        )
+
+    if plot_data.duplicated(
+        subset=["fold_id", "model_family"]
+    ).any():
+        raise ValueError(
+            "Each model must have exactly one MAE value per fold."
+        )
+
+    figure, axes = plt.subplots(
+        figsize=(11, 7),
+    )
+
+    for model_family, model_data in plot_data.groupby(
+        "model_family",
+        sort=True,
+    ):
+        model_data = (
+            model_data
+            .sort_values("fold_id")
+            .reset_index(drop=True)
+        )
+
+        axes.plot(
+            model_data["fold_id"],
+            model_data["mae_min"],
+            marker="o",
+            linewidth=2,
+            label=model_family,
+        )
+
+    fold_ids = sorted(
+        plot_data["fold_id"].unique()
+    )
+
+    axes.set_title(
+        f"{forecast_region}: Rolling-Origin Backtesting MAE",
+        fontsize=14,
+    )
+
+    axes.set_xlabel("Historical backtest fold")
+    axes.set_ylabel("MAE, minutes")
+
+    axes.set_xticks(fold_ids)
+
+    axes.grid(
+        True,
+        alpha=0.3,
+    )
+
+    axes.legend()
+
+    figure.tight_layout()
+
+    if output_path is not None:
+        output_path = Path(output_path)
+
+        output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        figure.savefig(
+            output_path,
+            dpi=200,
+            bbox_inches="tight",
+        )
+
+    return figure, axes

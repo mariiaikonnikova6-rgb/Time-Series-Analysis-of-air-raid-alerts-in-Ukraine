@@ -6,6 +6,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.stattools import acf, pacf
+
 # ---------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------
@@ -1102,6 +1105,889 @@ def plot_daily_duration_correlation_heatmap(
                 va="center",
                 fontsize=10,
             )
+
+    figure.tight_layout()
+
+    if output_path is not None:
+        output_path = Path(output_path)
+
+        output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        figure.savefig(
+            output_path,
+            dpi=200,
+            bbox_inches="tight",
+        )
+
+    return figure, axes
+
+
+
+def plot_daily_time_series_with_rolling_means(
+    daily_metrics: pd.DataFrame,
+    forecast_region: str,
+    test_start_date: str | pd.Timestamp,
+    output_path: str | Path | None = None,
+):
+    """
+    Plot a complete daily time series for one region with trailing
+    7-day and 28-day rolling means and a chronological train/test boundary.
+
+    The rolling means are descriptive EDA values: they include the
+    current day. Forecasting features remain leakage-free because
+    their rolling means are shifted by one day separately.
+    """
+    required_columns = [
+        "date",
+        "region",
+        "total_duration_min",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in daily_metrics.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "daily_metrics is missing required columns: "
+            f"{missing_columns}"
+        )
+
+    test_start_date = pd.to_datetime(
+        test_start_date,
+        errors="coerce",
+    )
+
+    if pd.isna(test_start_date):
+        raise ValueError(
+            "test_start_date must be a valid date."
+        )
+
+    time_series_data = (
+        daily_metrics.loc[
+            daily_metrics["region"].eq(forecast_region),
+            ["date", "total_duration_min"],
+        ]
+        .copy()
+    )
+
+    if time_series_data.empty:
+        raise ValueError(
+            f"No observations found for region: {forecast_region}"
+        )
+
+    time_series_data["date"] = pd.to_datetime(
+        time_series_data["date"],
+        errors="coerce",
+    )
+
+    time_series_data["total_duration_min"] = pd.to_numeric(
+        time_series_data["total_duration_min"],
+        errors="coerce",
+    )
+
+    if time_series_data["date"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid dates."
+        )
+
+    if time_series_data["total_duration_min"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid durations."
+        )
+
+    if (time_series_data["total_duration_min"] < 0).any():
+        raise ValueError(
+            "The selected time series contains negative durations."
+        )
+
+    time_series_data = (
+        time_series_data
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    if time_series_data["date"].duplicated().any():
+        raise ValueError(
+            "The selected time series contains duplicate dates."
+        )
+
+    expected_dates = pd.date_range(
+        start=time_series_data["date"].min(),
+        end=time_series_data["date"].max(),
+        freq="D",
+    )
+
+    if not pd.DatetimeIndex(
+        time_series_data["date"]
+    ).equals(expected_dates):
+        raise ValueError(
+            "The selected time series is not continuous by day."
+        )
+
+    if test_start_date not in pd.DatetimeIndex(
+        time_series_data["date"]
+    ):
+        raise ValueError(
+            "test_start_date is not present in the time series."
+        )
+
+    time_series_data["rolling_mean_7"] = (
+        time_series_data["total_duration_min"]
+        .rolling(
+            window=7,
+            min_periods=7,
+        )
+        .mean()
+    )
+
+    time_series_data["rolling_mean_28"] = (
+        time_series_data["total_duration_min"]
+        .rolling(
+            window=28,
+            min_periods=28,
+        )
+        .mean()
+    )
+
+    figure, axes = plt.subplots(
+        figsize=(15, 8),
+    )
+
+    axes.plot(
+        time_series_data["date"],
+        time_series_data["total_duration_min"],
+        label="Daily total duration",
+        alpha=0.35,
+        linewidth=1,
+    )
+
+    axes.plot(
+        time_series_data["date"],
+        time_series_data["rolling_mean_7"],
+        label="7-day trailing mean",
+        linewidth=1.8,
+    )
+
+    axes.plot(
+        time_series_data["date"],
+        time_series_data["rolling_mean_28"],
+        label="28-day trailing mean",
+        linewidth=2,
+    )
+
+    axes.axvline(
+        test_start_date,
+        label="Test period begins",
+        linewidth=1.5,
+    )
+
+    maximum_duration = time_series_data[
+        "total_duration_min"
+    ].max()
+
+    axes.text(
+        time_series_data["date"].min(),
+        maximum_duration * 0.96,
+        "Training period",
+        ha="left",
+        va="top",
+    )
+
+    axes.text(
+        test_start_date + pd.Timedelta(days=7),
+        maximum_duration * 0.96,
+        "Test period",
+        ha="left",
+        va="top",
+    )
+
+    axes.set_title(
+        f"{forecast_region}: Daily Total Air Raid Alert Duration "
+        "with Trailing Rolling Means",
+        fontsize=14,
+    )
+
+    axes.set_xlabel("Date")
+    axes.set_ylabel("Total alert duration, minutes")
+
+    axes.grid(
+        True,
+        alpha=0.3,
+    )
+
+    axes.legend()
+
+    figure.tight_layout()
+
+    if output_path is not None:
+        output_path = Path(output_path)
+
+        output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        figure.savefig(
+            output_path,
+            dpi=200,
+            bbox_inches="tight",
+        )
+
+    return time_series_data, figure, axes
+
+
+
+def prepare_acf_pacf_lag_diagnostics(
+    daily_metrics: pd.DataFrame,
+    forecast_region: str,
+    test_start_date: str | pd.Timestamp,
+    max_lags: int = 60,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Prepare train-only ACF/PACF diagnostics for one daily time series.
+
+    The final test period is excluded so that lag selection and feature
+    justification use only observations available before forecasting.
+    """
+    required_columns = [
+        "date",
+        "region",
+        "total_duration_min",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in daily_metrics.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "daily_metrics is missing required columns: "
+            f"{missing_columns}"
+        )
+
+    if max_lags <= 0:
+        raise ValueError(
+            "max_lags must be a positive integer."
+        )
+
+    test_start_date = pd.to_datetime(
+        test_start_date,
+        errors="coerce",
+    )
+
+    if pd.isna(test_start_date):
+        raise ValueError(
+            "test_start_date must be a valid date."
+        )
+
+    test_start_date = test_start_date.normalize()
+
+    time_series_data = (
+        daily_metrics.loc[
+            daily_metrics["region"].eq(forecast_region),
+            ["date", "total_duration_min"],
+        ]
+        .copy()
+    )
+
+    if time_series_data.empty:
+        raise ValueError(
+            f"No observations found for region: {forecast_region}"
+        )
+
+    time_series_data["date"] = pd.to_datetime(
+        time_series_data["date"],
+        errors="coerce",
+    ).dt.normalize()
+
+    time_series_data["total_duration_min"] = pd.to_numeric(
+        time_series_data["total_duration_min"],
+        errors="coerce",
+    )
+
+    if time_series_data["date"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid dates."
+        )
+
+    if time_series_data["total_duration_min"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid durations."
+        )
+
+    if (time_series_data["total_duration_min"] < 0).any():
+        raise ValueError(
+            "The selected time series contains negative durations."
+        )
+
+    time_series_data = (
+        time_series_data
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    if time_series_data["date"].duplicated().any():
+        raise ValueError(
+            "The selected time series contains duplicate dates."
+        )
+
+    expected_dates = pd.date_range(
+        start=time_series_data["date"].min(),
+        end=time_series_data["date"].max(),
+        freq="D",
+    )
+
+    if not pd.DatetimeIndex(
+        time_series_data["date"]
+    ).equals(expected_dates):
+        raise ValueError(
+            "The selected time series is not continuous by day."
+        )
+
+    if test_start_date not in pd.DatetimeIndex(
+        time_series_data["date"]
+    ):
+        raise ValueError(
+            "test_start_date is not present in the time series."
+        )
+
+    training_series = (
+        time_series_data.loc[
+            time_series_data["date"].lt(test_start_date)
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    if training_series.empty:
+        raise ValueError(
+            "No training observations remain after excluding "
+            "the final test period."
+        )
+
+    # The Yule-Walker PACF estimator requires the lag count to remain
+    # below half of the available observations.
+    if max_lags >= len(training_series) / 2:
+        raise ValueError(
+            "max_lags must be smaller than half the number of "
+            "training observations."
+        )
+
+    duration_values = training_series[
+        "total_duration_min"
+    ].to_numpy(dtype=float)
+
+    acf_values, acf_confidence_intervals = acf(
+        duration_values,
+        nlags=max_lags,
+        alpha=0.05,
+        fft=True,
+    )
+
+    pacf_values, pacf_confidence_intervals = pacf(
+        duration_values,
+        nlags=max_lags,
+        alpha=0.05,
+        method="ywm",
+    )
+
+    lag_diagnostics = pd.DataFrame(
+        {
+            "lag_days": range(max_lags + 1),
+            "acf": acf_values,
+            "acf_lower_95": acf_confidence_intervals[:, 0],
+            "acf_upper_95": acf_confidence_intervals[:, 1],
+            "pacf": pacf_values,
+            "pacf_lower_95": pacf_confidence_intervals[:, 0],
+            "pacf_upper_95": pacf_confidence_intervals[:, 1],
+        }
+    )
+
+    lag_diagnostics["acf_significant_95"] = (
+        lag_diagnostics["acf_lower_95"].gt(0)
+        | lag_diagnostics["acf_upper_95"].lt(0)
+    )
+
+    lag_diagnostics["pacf_significant_95"] = (
+        lag_diagnostics["pacf_lower_95"].gt(0)
+        | lag_diagnostics["pacf_upper_95"].lt(0)
+    )
+
+    lag_diagnostics["approximate_zero_threshold"] = (
+        1.96 / np.sqrt(len(training_series))
+    )
+
+    return training_series, lag_diagnostics
+
+
+def plot_acf_pacf_lag_diagnostics(
+    training_series: pd.DataFrame,
+    max_lags: int,
+    selected_lags: list[int],
+    output_path: str | Path | None = None,
+):
+    """
+    Plot ACF and PACF for a train-only daily time series.
+
+    Selected lags are marked with vertical dashed lines to highlight
+    forecast-related features such as lag_1, lag_7 and lag_14.
+    """
+    required_columns = [
+        "date",
+        "total_duration_min",
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in training_series.columns
+    ]
+
+    if missing_columns:
+        raise KeyError(
+            "training_series is missing required columns: "
+            f"{missing_columns}"
+        )
+
+    if max_lags <= 0:
+        raise ValueError(
+            "max_lags must be a positive integer."
+        )
+
+    if not selected_lags:
+        raise ValueError(
+            "selected_lags cannot be empty."
+        )
+
+    if any(
+        lag <= 0 or lag > max_lags
+        for lag in selected_lags
+    ):
+        raise ValueError(
+            "Each selected lag must be between 1 and max_lags."
+        )
+
+    plot_data = training_series.copy()
+
+    plot_data["date"] = pd.to_datetime(
+        plot_data["date"],
+        errors="coerce",
+    )
+
+    plot_data["total_duration_min"] = pd.to_numeric(
+        plot_data["total_duration_min"],
+        errors="coerce",
+    )
+
+    if plot_data["date"].isna().any():
+        raise ValueError(
+            "training_series contains invalid dates."
+        )
+
+    if plot_data["total_duration_min"].isna().any():
+        raise ValueError(
+            "training_series contains invalid durations."
+        )
+
+    if (plot_data["total_duration_min"] < 0).any():
+        raise ValueError(
+            "training_series contains negative durations."
+        )
+
+    plot_data = (
+        plot_data
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    if max_lags >= len(plot_data) / 2:
+        raise ValueError(
+            "max_lags must be smaller than half the number of "
+            "training observations."
+        )
+
+    duration_values = plot_data[
+        "total_duration_min"
+    ].to_numpy(dtype=float)
+
+    figure, axes = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(15, 11),
+        sharex=True,
+    )
+
+    plot_acf(
+        duration_values,
+        lags=max_lags,
+        alpha=0.05,
+        zero=False,
+        fft=True,
+        ax=axes[0],
+    )
+
+    plot_pacf(
+        duration_values,
+        lags=max_lags,
+        alpha=0.05,
+        zero=False,
+        method="ywm",
+        ax=axes[1],
+    )
+
+    for axes_item in axes:
+        for lag in selected_lags:
+            axes_item.axvline(
+                lag,
+                linestyle="--",
+                alpha=0.45,
+            )
+
+        axes_item.set_xlabel("Lag, days")
+
+        axes_item.grid(
+            True,
+            alpha=0.25,
+        )
+
+    axes[0].set_title(
+        "Autocorrelation Function (ACF)",
+        fontsize=14,
+    )
+
+    axes[1].set_title(
+        "Partial Autocorrelation Function (PACF)",
+        fontsize=14,
+    )
+
+    figure.suptitle(
+        "Kyiv City: Daily Total Alert Duration Lag Diagnostics",
+        fontsize=16,
+        y=0.99,
+    )
+
+    figure.tight_layout(
+        rect=[0, 0, 1, 0.97]
+    )
+
+    if output_path is not None:
+        output_path = Path(output_path)
+
+        output_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        figure.savefig(
+            output_path,
+            dpi=200,
+            bbox_inches="tight",
+        )
+
+    return figure, axes
+
+
+
+WEEKDAY_ORDER = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+
+
+def prepare_weekday_pattern(
+    daily_metrics: pd.DataFrame,
+    forecast_region: str,
+    test_start_date: str | pd.Timestamp,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Prepare a train-only weekday summary for one region.
+
+    The final test period is excluded so that calendar-feature analysis
+    uses only observations available before forecasting.
+    """
+    required_columns = [
+        "date",
+        "region",
+        "total_duration_min",
+    ]
+
+    validate_required_columns(
+        dataframe=daily_metrics,
+        required_columns=required_columns,
+    )
+
+    test_start_date = pd.to_datetime(
+        test_start_date,
+        errors="coerce",
+    )
+
+    if pd.isna(test_start_date):
+        raise ValueError(
+            "test_start_date must be a valid date."
+        )
+
+    test_start_date = test_start_date.normalize()
+
+    weekday_data = (
+        daily_metrics.loc[
+            daily_metrics["region"].eq(forecast_region),
+            ["date", "total_duration_min"],
+        ]
+        .copy()
+    )
+
+    if weekday_data.empty:
+        raise ValueError(
+            f"No observations found for region: {forecast_region}"
+        )
+
+    weekday_data["date"] = pd.to_datetime(
+        weekday_data["date"],
+        errors="coerce",
+    ).dt.normalize()
+
+    weekday_data["total_duration_min"] = pd.to_numeric(
+        weekday_data["total_duration_min"],
+        errors="coerce",
+    )
+
+    if weekday_data["date"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid dates."
+        )
+
+    if weekday_data["total_duration_min"].isna().any():
+        raise ValueError(
+            "The selected time series contains invalid durations."
+        )
+
+    if (weekday_data["total_duration_min"] < 0).any():
+        raise ValueError(
+            "The selected time series contains negative durations."
+        )
+
+    weekday_data = (
+        weekday_data
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    if weekday_data["date"].duplicated().any():
+        raise ValueError(
+            "The selected time series contains duplicate dates."
+        )
+
+    expected_dates = pd.date_range(
+        start=weekday_data["date"].min(),
+        end=weekday_data["date"].max(),
+        freq="D",
+    )
+
+    if not pd.DatetimeIndex(
+        weekday_data["date"]
+    ).equals(expected_dates):
+        raise ValueError(
+            "The selected time series is not continuous by day."
+        )
+
+    if test_start_date not in pd.DatetimeIndex(
+        weekday_data["date"]
+    ):
+        raise ValueError(
+            "test_start_date is not present in the time series."
+        )
+
+    training_weekday_data = (
+        weekday_data.loc[
+            weekday_data["date"].lt(test_start_date)
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    if training_weekday_data.empty:
+        raise ValueError(
+            "No training observations remain after excluding "
+            "the final test period."
+        )
+
+    training_weekday_data["weekday"] = (
+        training_weekday_data["date"]
+        .dt.day_name()
+    )
+
+    training_weekday_data["weekday"] = pd.Categorical(
+        training_weekday_data["weekday"],
+        categories=WEEKDAY_ORDER,
+        ordered=True,
+    )
+
+    weekday_summary = (
+        training_weekday_data
+        .groupby(
+            "weekday",
+            observed=True,
+            as_index=False,
+        )
+        .agg(
+            days=("date", "count"),
+            mean_duration_min=(
+                "total_duration_min",
+                "mean",
+            ),
+            median_duration_min=(
+                "total_duration_min",
+                "median",
+            ),
+            std_duration_min=(
+                "total_duration_min",
+                "std",
+            ),
+            min_duration_min=(
+                "total_duration_min",
+                "min",
+            ),
+            max_duration_min=(
+                "total_duration_min",
+                "max",
+            ),
+            zero_duration_days=(
+                "total_duration_min",
+                lambda values: int(values.eq(0).sum()),
+            ),
+            zero_duration_share_percent=(
+                "total_duration_min",
+                lambda values: values.eq(0).mean() * 100,
+            ),
+        )
+        .sort_values("weekday")
+        .reset_index(drop=True)
+    )
+
+    if len(weekday_summary) != 7:
+        raise ValueError(
+            "Expected all seven weekdays in the training period."
+        )
+
+    return training_weekday_data, weekday_summary
+
+
+def plot_weekday_pattern(
+    weekday_summary: pd.DataFrame,
+    forecast_region: str,
+    output_path: str | Path | None = None,
+):
+    """
+    Plot mean and median daily alert duration by weekday.
+    """
+    required_columns = [
+        "weekday",
+        "mean_duration_min",
+        "median_duration_min",
+    ]
+
+    validate_required_columns(
+        dataframe=weekday_summary,
+        required_columns=required_columns,
+    )
+
+    plot_data = weekday_summary.copy()
+
+    plot_data["weekday"] = pd.Categorical(
+        plot_data["weekday"],
+        categories=WEEKDAY_ORDER,
+        ordered=True,
+    )
+
+    plot_data["mean_duration_min"] = pd.to_numeric(
+        plot_data["mean_duration_min"],
+        errors="coerce",
+    )
+
+    plot_data["median_duration_min"] = pd.to_numeric(
+        plot_data["median_duration_min"],
+        errors="coerce",
+    )
+
+    if plot_data["weekday"].isna().any():
+        raise ValueError(
+            "weekday_summary contains invalid weekday names."
+        )
+
+    if plot_data[
+        ["mean_duration_min", "median_duration_min"]
+    ].isna().any().any():
+        raise ValueError(
+            "weekday_summary contains invalid duration values."
+        )
+
+    if (
+        plot_data[
+            ["mean_duration_min", "median_duration_min"]
+        ] < 0
+    ).any().any():
+        raise ValueError(
+            "weekday_summary contains negative duration values."
+        )
+
+    plot_data = (
+        plot_data
+        .sort_values("weekday")
+        .reset_index(drop=True)
+    )
+
+    if plot_data["weekday"].tolist() != WEEKDAY_ORDER:
+        raise ValueError(
+            "weekday_summary must contain Monday through Sunday "
+            "exactly once and in the standard order."
+        )
+
+    figure, axes = plt.subplots(
+        figsize=(13, 7),
+    )
+
+    axes.bar(
+        plot_data["weekday"],
+        plot_data["mean_duration_min"],
+        label="Mean daily duration",
+    )
+
+    axes.plot(
+        plot_data["weekday"],
+        plot_data["median_duration_min"],
+        marker="o",
+        linewidth=2,
+        label="Median daily duration",
+    )
+
+    axes.set_title(
+        f"{forecast_region}: Daily Alert Duration by Day of Week "
+        "(Training Period)",
+        fontsize=14,
+    )
+
+    axes.set_xlabel("Day of week")
+    axes.set_ylabel("Total alert duration, minutes")
+
+    axes.grid(
+        axis="y",
+        alpha=0.3,
+    )
+
+    axes.legend()
 
     figure.tight_layout()
 

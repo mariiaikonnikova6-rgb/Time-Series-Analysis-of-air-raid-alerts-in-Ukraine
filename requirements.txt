@@ -8,3 +8,4 @@ jupyter
 ipykernel
 ipython
 tzdata
+statsmodels
